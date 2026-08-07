@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 
-type View = "overview" | "materials" | "agent" | "products" | "report" | "standards";
+type View = "overview" | "materials" | "agent" | "evidence" | "products" | "report" | "evaluation" | "standards";
 
 const documents = [
   { name: "营业执照.jpg", type: "主体资料", state: "已核验", meta: "统一社会信用代码 · 有效" },
@@ -58,8 +58,10 @@ export default function Home() {
     { id: "overview", label: "融资体检", icon: "⌂" },
     { id: "materials", label: "材料中心", icon: "▤" },
     { id: "agent", label: "Agent 工作台", icon: "✦" },
+    { id: "evidence", label: "业务证据链", icon: "⌘" },
     { id: "products", label: "产品匹配", icon: "◈" },
     { id: "report", label: "准备度报告", icon: "▥" },
+    { id: "evaluation", label: "能力评测", icon: "◎" },
     { id: "standards", label: "规则与依据", icon: "§" },
   ];
 
@@ -80,8 +82,10 @@ export default function Home() {
         {view === "overview" && <Overview companyName={companyName} readiness={readiness} complete={complete} runCheck={runCheck} setView={setView} />}
         {view === "materials" && <Materials files={files} demoLoaded={demoLoaded} onDemo={() => {setDemoLoaded(true);setFiles(5)}} onUpload={() => fileRef.current?.click()} />}
         {view === "agent" && <AgentView running={running} complete={complete} resolved={resolved} steps={steps} onResolve={() => setResolved(true)} />}
+        {view === "evidence" && <EvidenceChain resolved={resolved} onResolve={() => setResolved(true)} />}
         {view === "products" && <Products resolved={resolved} />}
         {view === "report" && <Report companyName={companyName} readiness={readiness} resolved={resolved} />}
+        {view === "evaluation" && <Evaluation />}
         {view === "standards" && <Standards />}
       </section>
 
@@ -147,3 +151,21 @@ function Standards(){const refs=[
   ["个人信息处理","《中华人民共和国个人信息保护法》","遵循合法、正当、必要、诚信和最小范围原则。","https://www.npc.gov.cn/npc/c2/c30834/202108/t20210820_313088.html"],
   ["贷款业务边界","《商业银行互联网贷款管理暂行办法》","平台只做材料准备和公开规则匹配，授信与风控由持牌银行独立完成。","https://www.nfra.gov.cn/cn/view/pages/rulesDetail.html?docId=916525"],
 ];return <div className="content"><div className="page-intro"><div><h2>规则与依据库</h2><p>正式规则必须记录发布机关、文号、适用范围、生效状态和更新时间。</p></div><span className="verified">官方来源优先</span></div><div className="rule-principles"><div><strong>事实层</strong><span>来自用户确认的原始材料</span></div><div><strong>计算层</strong><span>公式与口径可复算</span></div><div><strong>规则层</strong><span>明确适用制度和版本</span></div><div><strong>提示层</strong><span>不确定性与人工确认</span></div></div><section className="panel standards-list">{refs.map(r=><a href={r[3]} target="_blank" rel="noreferrer" key={r[1]}><span>{r[0]}</span><div><strong>{r[1]}</strong><p>{r[2]}</p></div><b>官方原文 ↗</b></a>)}</section><section className="disclaimer"><strong>规则引擎的合规边界</strong><p>应用不会以模型生成内容替代正式准则、税收规范性文件或银行制度。涉及税种、地区、纳税人资格、会计政策选择及金融产品条件时，必须先确认适用范围；无法确认时停止自动结论，转为“信息不足”或“建议专业人员复核”。</p></section></div>}
+
+function EvidenceChain({resolved,onResolve}:{resolved:boolean;onResolve:()=>void}){
+  const chain=[
+    {type:"合同",name:"设备采购合同",value:"¥260,000",state:"已提取",source:"采购合同.pdf · P3"},
+    {type:"发票",name:"设备采购进项发票",value:"¥180,000",state:"存在差额",source:"进项发票.xlsx · 第 8–12 行"},
+    {type:"流水",name:"对公账户付款",value:"¥180,000",state:"已勾稽",source:"银行流水.pdf · P9"},
+    {type:"会计",name:"固定资产暂估入账",value:"¥260,000",state:"待确认",source:"资产负债表.xlsx · 固定资产"},
+    {type:"用途",name:"新店设备采购",value:"¥800,000",state:"融资目标",source:"用户填报 · 2026-08-07"},
+  ];
+  return <div className="content"><div className="page-intro"><div><h2>业务证据链</h2><p>把合同、发票、流水、会计记录和融资用途连接为可核验的经营事实。</p></div><span className="verified">链路完整度 76%</span></div>
+    <div className="evidence-layout"><section className="panel chain-panel"><div className="panel-title"><div><span className="section-kicker">交易链路 EC-0042</span><h3>新店设备采购</h3></div><em className="pending">1 项待解释</em></div><div className="chain-flow">{chain.map((n,i)=><div className="chain-node" key={n.type}><div className={`node-icon n${i}`}>{n.type.slice(0,1)}</div><div><span>{n.type}</span><strong>{n.name}</strong><b>{n.value}</b><small>⌕ {n.source}</small></div><em className={n.state==="已勾稽"||n.state==="已提取"?"ok":"pending"}>{n.state}</em>{i<chain.length-1&&<i>↓</i>}</div>)}</div></section>
+      <section className="evidence-side"><div className="panel audit-card"><span className="section-kicker">规则核验结果</span><h3>合同与已取得发票相差 ¥80,000</h3><div className="layer-list"><div><b>事实</b><p>合同金额 260,000；已取得发票 180,000；银行已付款 180,000。</p></div><div><b>计算</b><p>260,000 − 180,000 = 80,000，差异率 30.77%。</p></div><div><b>规则</b><p>会计核算应以实际发生的经济业务事项为依据，原始凭证须经审核。</p></div><div><b>判断</b><p>信息不足，不能认定发票缺失或会计处理错误。</p></div></div></div>
+      <div className="panel human-gate"><span className="section-kicker">人工确认节点</span><h3>{resolved?"业务背景已补充":"请选择差额原因"}</h3>{resolved?<div className="resolved"><span>✓</span><div><strong>剩余设备尚未交付</strong><small>状态已更新为“时间性差异”，保留后续发票补充任务。</small></div></div>:<div className="choice-grid"><button onClick={onResolve}>剩余设备尚未交付</button><button onClick={onResolve}>发票尚未取得</button><button onClick={onResolve}>合同发生变更</button><button onClick={onResolve}>交由财务人员复核</button></div>}</div></section></div>
+    <section className="panel ledger"><div className="panel-title"><div><span className="section-kicker">全量链路</span><h3>经营事实登记簿</h3></div><span>共 12 条 · 3 条待确认</span></div>{[["EC-0042","设备采购","合同→发票→流水→会计","待确认"],["EC-0037","门店租赁","合同→流水→费用","已闭环"],["EC-0031","团餐销售","合同→发票→流水→收入","已闭环"],["EC-0024","股东借款","协议→流水→其他应付款","已解释"]].map(x=><div className="ledger-row" key={x[0]}><code>{x[0]}</code><strong>{x[1]}</strong><span>{x[2]}</span><em className={x[3]==="已闭环"||x[3]==="已解释"?"ok":"pending"}>{x[3]}</em><button>查看证据 →</button></div>)}</section>
+  </div>
+}
+
+function Evaluation(){const metrics=[["材料分类准确率","96.7%","29 / 30"],["关键字段准确率","94.2%","486 / 516"],["异常线索召回率","92.0%","46 / 50"],["证据引用准确率","97.8%","89 / 91"],["应拒绝判断率","100%","12 / 12"],["完整任务成功率","86.7%","26 / 30"]];return <div className="content"><div className="page-intro"><div><h2>Agent 能力评测</h2><p>使用虚构且带标注的 30 套小微企业案例，所有成绩与线上真实文件分析严格分开。</p></div><span className="verified">评测集 v0.2</span></div><div className="eval-hero"><div><span>综合任务得分</span><strong>91.3</strong><small>/ 100</small></div><p>评测覆盖材料缺失、主体不一致、金额差异、时间顺序、个人转账、重复流水及规则适用不确定等场景。</p></div><div className="eval-grid">{metrics.map(m=><div className="metric-card" key={m[0]}><span>{m[0]}</span><strong>{m[1]}</strong><small>{m[2]} 个样本判断正确</small><div><i style={{width:m[1]}}/></div></div>)}</div><section className="panel case-table"><div className="panel-title"><div><span className="section-kicker">失败案例复盘</span><h3>系统仍然会错在哪里</h3></div><span>最近运行：2026-08-07</span></div>{[["CASE-018","扫描件表格错位","字段抽取","进项税额与价税合计列错位","转人工确认"],["CASE-023","相似企业名称","证据匹配","把关联公司付款匹配到本企业合同","已增加主体强校验"],["CASE-029","合同补充协议","金额勾稽","未读取补充协议中的调价条款","待优化文档关联"]].map(x=><div className="case-row" key={x[0]}><code>{x[0]}</code><strong>{x[1]}</strong><span>{x[2]}</span><p>{x[3]}</p><em>{x[4]}</em></div>)}</section><section className="disclaimer"><strong>评测说明</strong><p>以上为比赛原型的目标评测展示结构，当前数值使用标注样本的模拟结果，用于说明评测方法，不代表已在生产环境或真实企业数据上达到相同水平。正式提交前必须由可复现测试脚本生成并保留运行日志。</p></section></div>}
