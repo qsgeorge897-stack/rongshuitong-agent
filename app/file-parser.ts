@@ -12,6 +12,10 @@ export type ParsedFile = {
   error?: string;
 };
 
+const MAX_FILE_SIZE = 30 * 1024 * 1024;
+const MAX_PDF_PAGES = 50;
+const MAX_OCR_PAGES = 12;
+
 const money = (value: unknown) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const normalized = String(value ?? "").replace(/[¥￥,，\s]/g, "").replace(/[()]/g, "-");
@@ -104,19 +108,58 @@ async function parseSheet(file: File) {
 
 async function parsePdf(file: File) {
   const pdfjs = await import("pdfjs-dist");
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+  const { default: workerSrc } = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
+  pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
   const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
   const chunks: string[] = [];
-  for (let index = 1; index <= Math.min(pdf.numPages, 50); index += 1) {
+  const weakPages: Array<{ index: number; page: Awaited<ReturnType<typeof pdf.getPage>> }> = [];
+  const pageLimit = Math.min(pdf.numPages, MAX_PDF_PAGES);
+  for (let index = 1; index <= pageLimit; index += 1) {
     const page = await pdf.getPage(index);
     const content = await page.getTextContent();
-    chunks.push(`【第${index}页】 ${content.items.map(item => "str" in item ? item.str : "").join(" ")}`);
+    const pageText = content.items.map(item => "str" in item ? item.str : "").join(" ").trim();
+    chunks.push(`【第${index}页】 ${pageText}`);
+    if (pageText.length < 20) weakPages.push({ index, page });
+  }
+
+  let ocrPages = 0;
+  let ocrConfidence = 0;
+  if (weakPages.length) {
+    const Tesseract = await import("tesseract.js");
+    const worker = await Tesseract.createWorker("chi_sim+eng");
+    try {
+      for (const { index, page } of weakPages.slice(0, MAX_OCR_PAGES)) {
+        const viewport = page.getViewport({ scale: 1.6 });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        const context = canvas.getContext("2d", { alpha: false });
+        if (!context) continue;
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+        const result = await worker.recognize(canvas);
+        const recognized = result.data.text.trim();
+        if (recognized) chunks[index - 1] = `【第${index}页·OCR】 ${recognized}`;
+        ocrConfidence += result.data.confidence;
+        ocrPages += 1;
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    } finally {
+      await worker.terminate();
+    }
   }
   const text = chunks.join("\n");
   return {
     text,
     rows: pdf.numPages,
-    fields: { "PDF页数": pdf.numPages, ...extractTextFields(text) },
+    fields: {
+      "PDF页数": pdf.numPages,
+      "文本提取页数": pageLimit - weakPages.length,
+      ...(ocrPages ? { "OCR页数": ocrPages, "OCR置信度": Number((ocrConfidence / ocrPages).toFixed(1)) } : {}),
+      ...(pdf.numPages > pageLimit ? { "未解析页数": pdf.numPages - pageLimit } : {}),
+      ...(weakPages.length > MAX_OCR_PAGES ? { "待人工核验页数": weakPages.length - MAX_OCR_PAGES } : {}),
+      ...extractTextFields(text),
+    },
     evidence: chunks.filter(chunk => chunk.length > 12).slice(0, 8).map(chunk => chunk.slice(0, 150)),
   };
 }
@@ -134,14 +177,18 @@ async function parseImage(file: File) {
 }
 
 export async function parseRealFile(file: File): Promise<ParsedFile> {
-  const base: ParsedFile = { id: `${Date.now()}-${file.name}`, name: file.name, kind: "其他", status: "解析中", rows: 0, text: "", fields: {}, evidence: [] };
+  const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  const base: ParsedFile = { id, name: file.name, kind: "其他", status: "解析中", rows: 0, text: "", fields: {}, evidence: [] };
   try {
+    if (!file.size) throw new Error("文件内容为空，请重新选择原始文件。");
+    if (file.size > MAX_FILE_SIZE) throw new Error("文件超过 30MB，请压缩或拆分后重新上传。");
     const extension = file.name.split(".").pop()?.toLowerCase();
     let result: { text: string; rows: number; fields: Record<string, string | number>; evidence: string[] };
     if (["xlsx", "xls", "csv"].includes(extension || "")) result = await parseSheet(file);
-    else if (extension === "pdf") result = await parsePdf(file);
+    else if (extension === "pdf" || file.type === "application/pdf") result = await parsePdf(file);
     else if (["jpg", "jpeg", "png", "webp"].includes(extension || "")) result = await parseImage(file);
-    else result = { text: await file.text(), rows: 1, fields: {}, evidence: [] };
+    else if (extension === "txt" || file.type.startsWith("text/")) result = { text: await file.text(), rows: 1, fields: {}, evidence: [] };
+    else throw new Error("暂不支持该文件格式，请上传 PDF、图片、Excel、CSV 或 TXT 文件。");
 
     const kind = classify(file.name, result.text);
     const isWeak = result.text.trim().length < 30;
@@ -152,10 +199,18 @@ export async function parseRealFile(file: File): Promise<ParsedFile> {
       kind,
       status: isWeak || lowOcr || kind === "其他" ? "需确认" : "已解析",
       fields: { ...result.fields, "文件大小KB": Number((file.size / 1024).toFixed(1)) },
-      error: isWeak ? "可提取文字较少，可能是扫描版 PDF；请转为清晰图片或人工确认。" : lowOcr ? "OCR 置信度较低，请对照原件确认。" : kind === "其他" ? "暂未识别材料类型，请人工选择或确认。" : undefined,
+      error: isWeak ? "文本与 OCR 均未提取到足够内容，请确认文件清晰度并对照原件人工核验。" : lowOcr ? "OCR 置信度较低，请对照原件确认。" : kind === "其他" ? "暂未识别材料类型，请人工选择或确认。" : undefined,
     };
   } catch (error) {
-    return { ...base, status: "失败", error: error instanceof Error ? error.message : "文件解析失败" };
+    const message = error instanceof Error ? error.message : "文件解析失败";
+    const friendly = /PasswordException|password/i.test(message)
+      ? "该 PDF 已加密或需要密码，请先解除密码保护后重新上传。"
+      : /InvalidPDFException|Invalid PDF/i.test(message)
+        ? "PDF 文件已损坏或格式无效，请用 PDF 阅读器重新另存后上传。"
+        : /worker|fake worker|file:\/\//i.test(message)
+          ? "PDF 解析组件加载失败，请刷新页面后重试。"
+          : message;
+    return { ...base, status: "失败", error: friendly };
   }
 }
 
